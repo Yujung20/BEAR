@@ -8,7 +8,7 @@
 ## 📌 Project Summary
 
 사용자가 **하루 세 번** 감정 및 식단 데이터를 기록하면,  
-LSTM 기반 감정 예측 모델이 **다음 날의 감정 상태를 예측**합니다.  
+LSTM 기반 감정 예측 모델이 **다음 날의 감정 상태를 예측**합니다.
 
 전체 웹 서비스는 **Django** 기반으로 구현되었으며, JavaScript를 활용해 **모바일(스마트폰) 반응형**으로 제작되었습니다.  
 배포는 **AWS Elastic Beanstalk + GitHub Actions 연동을 통한 자동 배포(CI/CD)** 로 구성했습니다.
@@ -76,6 +76,7 @@ For diet, the system recommends a full day's meal plan that matches the user's c
 ┌─────────────────────────────────────────────────┐
 │              감정 예측 모듈 (LSTM)                │
 │  과거 감정 기록 → 다음날 감정 상태 예측            │
+│  (1M+ records · 7 features · recall ≥ 70%)      │
 └─────────────────────────────┬───────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
@@ -83,11 +84,11 @@ For diet, the system recommends a full day's meal plan that matches the user's c
   [부정적 감정 예측]                        [안정적 감정 예측]
           │                                       │
           ▼                                       ▼
-  외부 데이터 기반                          격려 메시지만
-  솔루션 후보 추출                            JSON 출력
+  행동 후보 스코어링                          격려 메시지만
+  (Rule-based + CF/SVD 하이브리드)             JSON 출력
           │
           ▼
-  RAG (감정·행동 논문 기반 ChromaDB)
+  RAG (감정·행동 논문 15편 기반 ChromaDB)
           │
           ▼
   행동 솔루션 + 응원 메시지 → JSON 출력 → 화면 표시
@@ -106,37 +107,83 @@ For diet, the system recommends a full day's meal plan that matches the user's c
 
 ## ✨ Main Features
 
+### 🧠 감정 예측 (LSTM)
+- 1,000명 사용자의 **1,000,940행** 행동·감정 데이터를 전처리 (Kaggle)
+- **7개 피처**를 선별해 LSTM 시계열 모델 구축, **재현율(Recall) ≥ 70%** 목표로 학습
+- 예측 결과를 기반으로 분기 처리 (부정 / 안정)
+
+**(ENG)**  
+Preprocessed 1,000,940 behavioral records from 1,000 Kaggle users down to 7 features, then trained an LSTM time-series model targeting recall ≥ 70% for next-day emotional risk prediction.
+
+---
+
+### 💡 행동 솔루션 추천 — 하이브리드 스코어링 (Rule-based + CF/SVD)
+
+행동 추천은 단순 RAG가 아닌 **두 단계 스코어링 파이프라인**으로 구성됩니다.
+
+**Step 1. Rule-based Score**
+
+감정 valence(기분)와 arousal(각성)의 변화량을 기반으로 행동 효과 점수를 산출합니다.
+
+```python
+# arousal은 변화가 적을수록 좋음 (너무 들뜨거나 가라앉는 것 모두 부담)
+df['arousal_effect'] = -(df['arousal_delta_norm'].abs())
+
+# valence 개선이 더 중요하므로 가중합으로 종합 점수 산출
+df['score'] = 0.6 * df['valence_delta_norm'] + 0.4 * df['arousal_effect']
+```
+
+기분이 실제로 개선된 행동만 필터링(`valence_delta > 0`)한 뒤,  
+행동 빈도(신뢰성)를 30% 반영한 **final_score**로 최종 랭킹을 산출합니다.
+
+```python
+pos_effect['final_score'] = 0.7 * pos_effect['score'] + 0.3 * pos_effect['count_norm']
+```
+
+| Activity | Final Score |
+|---|---|
+| gym workout | 0.605 |
+| swimming | 0.604 |
+| walking | 0.604 |
+| cycling | 0.603 |
+| running | 0.603 |
+
+**Step 2. CF/SVD Score**
+
+Rule-based 결과에 협업 필터링(SVD)을 결합해 사용자 패턴 기반 예측 점수를 산출하고,  
+두 점수를 **50:50 가중합**하여 최종 추천 행동 Top 3를 선정합니다.
+
+```python
+df['final_score'] = 0.5 * df['rule_score'] + 0.5 * df['cf_score']
+```
+
+**Step 3. RAG**
+
+선정된 Top 3 행동과 감정·행동 관련 **논문 15편**을 ChromaDB에 인덱싱한 벡터 DB를 결합해,  
+LLM이 맥락에 맞는 행동 솔루션과 응원 메시지를 생성합니다.
+
+**(ENG)**  
+Behavior recommendations follow a three-stage pipeline: (1) rule-based valence/arousal scoring to rank activities by emotional effect, (2) CF+SVD collaborative filtering combined at 50:50 weight to personalize rankings, and (3) RAG over 15 research papers indexed in ChromaDB to generate context-aware LLM messages.
+
+---
+
+### 🚀 AWS 자동 배포 (CI/CD) — 배포 시간 54분 → 1분 30초
+
+- AWS Elastic Beanstalk 기반 배포 환경 구성
+- GitHub Actions 연동으로 push 시 자동 배포 파이프라인 구축
+- 초기 배포 시 **타임아웃(54분)** 으로 배포 실패 발생
+- ML 패키지(TensorFlow 등) 를 별도 레이어로 분리해 **평균 배포 시간 1분 30초**로 단축
+
+**(ENG)**  
+Configured AWS Elastic Beanstalk with a GitHub Actions CI/CD pipeline. Resolved a critical deployment timeout (54 min) caused by heavy ML package installation by separating packages into isolated layers, reducing average deploy time to ~1.5 min.
+
+---
+
 ### 🌐 Django 웹 서비스 및 반응형 UI
 - Django 기반 전체 웹 서비스 구현
 - JavaScript를 활용한 모바일(스마트폰) 반응형 UI 구성
 
 **(ENG)** Built the full web service with Django and implemented a mobile-responsive UI using JavaScript.
-
----
-
-### 🚀 AWS 자동 배포 (CI/CD)
-- AWS Elastic Beanstalk 기반 배포 환경 구성
-- GitHub Actions 연동으로 push 시 자동 배포 파이프라인 구축
-
-**(ENG)** Configured deployment on AWS Elastic Beanstalk and built an automated CI/CD pipeline triggered by GitHub Actions on push.
-
----
-
-### 🧠 감정 예측 (LSTM)
-- 하루 3회 기록된 감정 데이터를 시계열로 학습
-- LSTM 모델로 다음 날의 감정 상태를 예측
-- 예측 결과를 기반으로 분기 처리 (부정 / 안정)
-
-**(ENG)** Time-series emotion data (3 records/day) is fed into an LSTM model to predict the next day's emotional state, which then determines the recommendation flow.
-
----
-
-### 💡 감정 완화 솔루션 추천 (RAG)
-- 감정 및 행동 관련 논문 수집 → ChromaDB 구축
-- 외부 데이터로 후보 솔루션 추출
-- RAG 파이프라인을 통해 감정 완화 행동 솔루션 + 응원 메시지를 JSON으로 출력
-
-**(ENG)** Research papers on emotion and behavior are embedded into ChromaDB. Candidate solutions are extracted from external data, then passed through a RAG pipeline to generate behavior recommendations and motivational messages as JSON output.
 
 ---
 
@@ -205,14 +252,18 @@ BEAR/
 ## 🧑‍💻 What I Learned
 
 - LSTM을 활용한 시계열 감정 데이터 예측 구조 설계
+- Rule-based + CF/SVD 하이브리드 스코어링 파이프라인 설계
 - ChromaDB를 활용한 RAG 파이프라인 구축
 - 논문 기반 외부 지식을 LLM 추천 시스템에 통합하는 방법
 - 통계 기반과 RAG 기반 추천 방식의 차이 비교
 - FastAPI + Docker 기반 AI 서비스 배포 경험
+- AWS 배포 타임아웃 문제 진단 및 패키지 분리를 통한 성능 개선
 
 **(ENG)**
 - Designing LSTM-based time-series emotion prediction pipelines
+- Building a hybrid Rule-based + CF/SVD scoring pipeline for behavior ranking
 - Building RAG pipelines using ChromaDB
 - Integrating research paper knowledge into LLM-based recommendation systems
 - Comparing statistical vs. RAG-based recommendation approaches
 - Deploying AI services using FastAPI and Docker
+- Diagnosing and resolving AWS deployment timeout via package layer separation
