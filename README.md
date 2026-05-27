@@ -103,6 +103,42 @@ For diet, the system recommends a full day's meal plan that matches the user's c
                 (식단·감정 관련 논문 기반 ChromaDB)
 ```
 
+**(ENG)**
+
+```
+User Input (emotion + meal data × 3 times/day)
+        │
+        ▼
+┌─────────────────────────────────────────────────┐
+│           Emotion Prediction Module (LSTM)       │
+│  Past emotion records → Next-day state prediction│
+│  (1M+ records · 7 features · recall ≥ 70%)      │
+└─────────────────────────────┬───────────────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                                       ▼
+  [Negative Emotion Predicted]        [Stable Emotion Predicted]
+          │                                       │
+          ▼                                       ▼
+  Behavior Candidate Scoring                Encouraging message
+  (Rule-based + CF/SVD Hybrid)               JSON output only
+          │
+          ▼
+  RAG (ChromaDB · 15 emotion-behavior papers)
+          │
+          ▼
+  Behavior solution + motivational message → JSON → UI
+
+─────────────────────────────────────────────────
+
+User sets carb / protein / fat ratio
+        │
+        ├─── ① Statistical-based meal recommendation
+        │
+        └─── ② RAG-based meal recommendation
+                (ChromaDB built from diet-emotion research papers)
+```
+
 ---
 
 ## ✨ Main Features
